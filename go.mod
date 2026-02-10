@@ -1,4 +1,4 @@
-module github.com/inventorgg/discordgo
+module github.com/invtbot/discordgo
 
 go 1.13
 
