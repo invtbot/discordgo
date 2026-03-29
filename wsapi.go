@@ -36,6 +36,14 @@ var ErrWSNotFound = errors.New("no websocket connection exists")
 // more than the total shard count
 var ErrWSShardBounds = errors.New("ShardID must be less than ShardCount")
 
+// ErrWSReconnectRequested is returned when Discord requests a reconnect during
+// the startup handshake before the session listener has started.
+var ErrWSReconnectRequested = errors.New("gateway requested reconnect during startup")
+
+// ErrWSInvalidSession is returned when Discord invalidates the session during
+// the startup handshake before the session listener has started.
+var ErrWSInvalidSession = errors.New("gateway invalid session during startup")
+
 type resumePacket struct {
 	Op   int `json:"op"`
 	Data struct {
@@ -183,6 +191,14 @@ func (s *Session) Open() error {
 	}
 	e, err = s.onEvent(mt, m)
 	if err != nil {
+		return err
+	}
+	if e.Operation == 7 {
+		err = ErrWSReconnectRequested
+		return err
+	}
+	if e.Operation == 9 {
+		err = ErrWSInvalidSession
 		return err
 	}
 	if e.Type != `READY` && e.Type != `RESUMED` {
@@ -616,6 +632,11 @@ func (s *Session) onEvent(messageType int, message []byte) (*Event, error) {
 	// Reconnect
 	// Must immediately disconnect from gateway and reconnect to new gateway.
 	if e.Operation == 7 {
+		if s.listening == nil {
+			s.log(LogInformational, "received Op7 during startup handshake")
+			return e, nil
+		}
+
 		s.log(LogInformational, "Closing and reconnecting in response to Op7")
 		s.CloseWithCode(websocket.CloseServiceRestart)
 		s.reconnect()
@@ -625,9 +646,6 @@ func (s *Session) onEvent(messageType int, message []byte) (*Event, error) {
 	// Invalid Session
 	// Must respond with a Identify packet.
 	if e.Operation == 9 {
-		s.log(LogInformational, "Closing and reconnecting in response to Op9")
-		s.CloseWithCode(websocket.CloseServiceRestart)
-
 		var resumable bool
 		if err := json.Unmarshal(e.RawData, &resumable); err != nil {
 			s.log(LogError, "error unmarshalling invalid session event, %s", err)
@@ -640,6 +658,14 @@ func (s *Session) onEvent(messageType int, message []byte) (*Event, error) {
 			s.sessionID = ""
 			atomic.StoreInt64(s.sequence, 0)
 		}
+
+		if s.listening == nil {
+			s.log(LogInformational, "received Op9 during startup handshake")
+			return e, nil
+		}
+
+		s.log(LogInformational, "Closing and reconnecting in response to Op9")
+		s.CloseWithCode(websocket.CloseServiceRestart)
 
 		s.reconnect()
 		return e, nil
@@ -714,10 +740,10 @@ type voiceChannelJoinOp struct {
 
 // ChannelVoiceJoin joins the session user to a voice channel.
 //
-//    gID     : Guild ID of the channel to join.
-//    cID     : Channel ID of the channel to join.
-//    mute    : If true, you will be set to muted upon joining.
-//    deaf    : If true, you will be set to deafened upon joining.
+//	gID     : Guild ID of the channel to join.
+//	cID     : Channel ID of the channel to join.
+//	mute    : If true, you will be set to muted upon joining.
+//	deaf    : If true, you will be set to deafened upon joining.
 func (s *Session) ChannelVoiceJoin(gID, cID string, mute, deaf bool) (voice *VoiceConnection, err error) {
 
 	s.log(LogInformational, "called")
@@ -761,10 +787,10 @@ func (s *Session) ChannelVoiceJoin(gID, cID string, mute, deaf bool) (voice *Voi
 //
 // This should only be used when the VoiceServerUpdate will be intercepted and used elsewhere.
 //
-//    gID     : Guild ID of the channel to join.
-//    cID     : Channel ID of the channel to join, leave empty to disconnect.
-//    mute    : If true, you will be set to muted upon joining.
-//    deaf    : If true, you will be set to deafened upon joining.
+//	gID     : Guild ID of the channel to join.
+//	cID     : Channel ID of the channel to join, leave empty to disconnect.
+//	mute    : If true, you will be set to muted upon joining.
+//	deaf    : If true, you will be set to deafened upon joining.
 func (s *Session) ChannelVoiceJoinManual(gID, cID string, mute, deaf bool) (err error) {
 
 	s.log(LogInformational, "called")
